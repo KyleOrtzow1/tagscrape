@@ -8,6 +8,7 @@ long-running scrape process.
 """
 
 import argparse
+import asyncio
 import csv
 import json
 import sys
@@ -16,8 +17,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
+import aiohttp
 
-import requests
+
+class _AsyncRateLimiter:
+    """Enforces a minimum delay between acquisitions using an async lock."""
+
+    def __init__(self, min_interval: float):
+        self._min_interval = min_interval
+        self._lock = asyncio.Lock()
+        self._last_time = 0.0
+
+    async def acquire(self):
+        async with self._lock:
+            now = time.monotonic()
+            wait = self._min_interval - (now - self._last_time)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_time = time.monotonic()
 
 
 class MTGDatabaseBuilder:
@@ -84,36 +101,31 @@ class MTGDatabaseBuilder:
     # Scryfall API interaction
     # ------------------------------------------------------------------
 
-    def _make_request(self, url: str) -> Dict:
+    async def _make_request(self, url: str, _retry: int = 0) -> Dict:
         """Make a rate-limited GET request to the Scryfall API."""
-        headers = {
-            "User-Agent": "MTGDatabaseBuilder/1.0",
-            "Accept": "application/json",
-        }
-
-        time.sleep(self.REQUEST_DELAY)
+        await self._rate_limiter.acquire()
         self.request_count += 1
 
-        response = requests.get(url, headers=headers)
+        async with self._session.get(url) as response:
+            if response.status == 429:
+                backoff = min(2 ** _retry, 16)
+                print(f"Rate limited, backing off {backoff}s...")
+                await asyncio.sleep(backoff)
+                return await self._make_request(url, _retry=_retry + 1)
 
-        if response.status_code == 429:
-            print("Rate limited, waiting 1 second...")
-            time.sleep(1)
-            return self._make_request(url)
+            response.raise_for_status()
+            return await response.json()
 
-        response.raise_for_status()
-        return response.json()
-
-    def _search_tag(self, tag: str) -> List[Dict]:
+    async def _search_tag(self, tag: str) -> List[Dict]:
         """Return all cards matching a given oracle tag, handling pagination."""
         all_cards: List[Dict] = []
         url: str | None = f"{self.BASE_URL}/cards/search?q=otag:{tag}"
 
         while url:
             try:
-                data = self._make_request(url)
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 404:
+                data = await self._make_request(url)
+            except aiohttp.ClientResponseError as e:
+                if e.status == 404:
                     break
                 raise
 
@@ -167,7 +179,7 @@ class MTGDatabaseBuilder:
     # Main pipeline
     # ------------------------------------------------------------------
 
-    def _process_tag(self, tag: str, tag_index: int, total_tags: int) -> int:
+    async def _process_tag(self, tag: str, tag_index: int, total_tags: int) -> int:
         """Fetch all cards for a single tag and merge them into the database."""
         if tag in self.processed_tags:
             return 0
@@ -175,7 +187,7 @@ class MTGDatabaseBuilder:
         print(f"\n[{tag_index + 1}/{total_tags}] Processing tag: '{tag}'")
 
         try:
-            cards = self._search_tag(tag)
+            cards = await self._search_tag(tag)
             print(f"   Found {len(cards)} cards")
 
             new_cards = 0
@@ -188,40 +200,67 @@ class MTGDatabaseBuilder:
             print(f"   Total cards in DB: {len(self.cards_db)}")
 
             self.processed_tags.add(tag)
-
-            if len(self.processed_tags) % self.CHECKPOINT_INTERVAL == 0:
-                print("   Saving checkpoint...")
-                self._save_checkpoint()
-
             return len(cards)
 
         except Exception as e:
             print(f"   Error processing tag '{tag}': {e}")
             return 0
 
+    BATCH_SIZE = 50  # tags processed concurrently per batch
+
     def build_database(self):
-        """Run the full scrape: iterate over every tag, build the card DB, export CSV."""
+        """Sync entry point — delegates to the async implementation."""
+        asyncio.run(self._build_database_async())
+
+    async def _build_database_async(self):
+        """Run the full scrape with batched async concurrency."""
         self.start_time = datetime.now()
-        remaining = len(self.all_tags) - len(self.processed_tags)
+        self._rate_limiter = _AsyncRateLimiter(self.REQUEST_DELAY)
+
+        remaining_tags = [
+            (i, tag) for i, tag in enumerate(self.all_tags)
+            if tag not in self.processed_tags
+        ]
+        total = len(self.all_tags)
 
         print(f"\n{'=' * 70}")
-        print("Starting MTG Card Database Build")
+        print("Starting MTG Card Database Build (async)")
         print(f"{'=' * 70}")
         print(f"Start time:       {self.start_time:%Y-%m-%d %H:%M:%S}")
-        print(f"Tags to process:  {len(self.all_tags)}")
+        print(f"Tags to process:  {total}")
         print(f"Already done:     {len(self.processed_tags)}")
-        print(f"Remaining:        {remaining}")
+        print(f"Remaining:        {len(remaining_tags)}")
+        print(f"Batch size:       {self.BATCH_SIZE}")
         print(f"{'=' * 70}\n")
 
-        for i, tag in enumerate(self.all_tags):
-            if tag in self.processed_tags:
-                continue
+        headers = {
+            "User-Agent": "MTGDatabaseBuilder/1.0",
+            "Accept": "application/json",
+        }
+        connector = aiohttp.TCPConnector(limit=10)
+        async with aiohttp.ClientSession(
+            headers=headers,
+            connector=connector,
+            raise_for_status=False,
+        ) as session:
+            self._session = session
 
-            self._process_tag(tag, i, len(self.all_tags))
+            for batch_start in range(0, len(remaining_tags), self.BATCH_SIZE):
+                batch = remaining_tags[batch_start:batch_start + self.BATCH_SIZE]
 
-            progress = ((i + 1) / len(self.all_tags)) * 100
-            elapsed = datetime.now() - self.start_time
-            print(f"   Progress: {progress:.1f}% | Elapsed: {elapsed}")
+                await asyncio.gather(*(
+                    self._process_tag(tag, idx, total)
+                    for idx, tag in batch
+                ))
+
+                # Progress report
+                done = len(self.processed_tags)
+                progress = (done / total) * 100
+                elapsed = datetime.now() - self.start_time
+                print(f"\n--- Batch done | Progress: {progress:.1f}% "
+                      f"({done}/{total}) | Elapsed: {elapsed} ---")
+
+                self._save_checkpoint()
 
         print("\nSaving final checkpoint...")
         self._save_checkpoint()
