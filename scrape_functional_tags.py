@@ -10,6 +10,7 @@ containing "(functional)" in the text.
 import argparse
 import json
 import re
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -93,6 +94,7 @@ def scrape_functional_tags():
 def save_to_json(data, filename="functional_tags.json"):
     """Save the functional tags data to a JSON file."""
     try:
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True)
 
@@ -108,8 +110,8 @@ def parse_args():
     )
     parser.add_argument(
         "-o", "--output",
-        default="functional_tags.json",
-        help="output JSON file path (default: functional_tags.json)",
+        default="data/functional_tags.json",
+        help="output JSON file path (default: data/functional_tags.json)",
     )
     return parser.parse_args()
 

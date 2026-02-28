@@ -81,6 +81,7 @@ def analyze_tag_frequency(csv_file: str, top_n: int = 100):
 
     # ---- Save full report ----
     output_file = Path(csv_file).with_name(Path(csv_file).stem + "_tag_frequency.txt")
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_file, "w", encoding="utf-8") as f:
         f.write("MTG TAG FREQUENCY ANALYSIS\n")

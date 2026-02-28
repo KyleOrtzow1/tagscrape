@@ -3,9 +3,8 @@ __pycache__/
 *.py[cod]
 venv/
 
-# Data files (too large for version control)
-*.csv
-scraper_checkpoint.json
+# Generated data
+data/
 
 # IDE
 .idea/

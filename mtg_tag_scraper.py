@@ -71,6 +71,7 @@ class MTGDatabaseBuilder:
 
     def _save_checkpoint(self):
         """Persist current progress so the scrape can be resumed later."""
+        Path(self.checkpoint_file).parent.mkdir(parents=True, exist_ok=True)
         checkpoint = {
             "processed_tags": list(self.processed_tags),
             "cards_db": self.cards_db,
@@ -265,6 +266,7 @@ class MTGDatabaseBuilder:
                 fieldnames.remove(field)
                 fieldnames.insert(0, field)
 
+        Path(self.output_csv).parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_csv, "w", newline="", encoding="utf-8") as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
@@ -288,13 +290,13 @@ def parse_args():
     )
     parser.add_argument(
         "-o", "--output",
-        default="mtg_cards_database.csv",
-        help="output CSV file (default: mtg_cards_database.csv)",
+        default="data/mtg_cards_database.csv",
+        help="output CSV file (default: data/mtg_cards_database.csv)",
     )
     parser.add_argument(
         "-c", "--checkpoint",
-        default="scraper_checkpoint.json",
-        help="checkpoint file for resume support (default: scraper_checkpoint.json)",
+        default="data/scraper_checkpoint.json",
+        help="checkpoint file for resume support (default: data/scraper_checkpoint.json)",
     )
     return parser.parse_args()
 

@@ -76,6 +76,7 @@ def sample_cards(input_csv: str, output_csv: str, sample_size: int, seed: int | 
     print(f"  Without tags:   {sample_size - sampled_tagged:,}")
 
     print(f"\nWriting to: {output_csv}")
+    Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=ML_FIELDS)
         writer.writeheader()
@@ -102,8 +103,8 @@ def parse_args():
     )
     parser.add_argument(
         "-o", "--output",
-        default="mtg_ml_sample.csv",
-        help="output CSV file (default: mtg_ml_sample.csv)",
+        default="data/mtg_ml_sample.csv",
+        help="output CSV file (default: data/mtg_ml_sample.csv)",
     )
     parser.add_argument(
         "-n", "--sample-size",
