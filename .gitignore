@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+
+# Data files (too large for version control)
+*.csv
+scraper_checkpoint.json
+
+# IDE
+.idea/
+.vscode/
