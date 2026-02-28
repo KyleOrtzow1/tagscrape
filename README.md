@@ -29,8 +29,6 @@ source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Or use the provided setup scripts (`setup_and_run.bat` / `setup_and_run.ps1`).
-
 ## Usage
 
 ```bash
